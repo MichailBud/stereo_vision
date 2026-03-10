@@ -359,5 +359,8 @@
       <pose>0.05 -0.05 0 0 0 0</pose>
     </joint>
 
+    <plugin name="wheel_robot_controller" filename="/home/michail/BIIS/navigation_ws/install/test_robot_plugin/lib/libwheel_robot_controller.so">
+    </plugin>
+
   </model>
 </sdf>

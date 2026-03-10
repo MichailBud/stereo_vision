@@ -181,7 +181,7 @@
     </link>
 
     <!-- Joint: chassis to left wheel -->
-    <joint name="chassis_to_left_wheel" type="revolute">
+    <joint name="left_wheel_joint" type="revolute">
       <parent>chassis</parent>
       <child>left_wheel</child>
       <pose>0 0 0 0 0 0</pose>
@@ -195,7 +195,7 @@
     </joint>
 
     <!-- Joint: chassis to right wheel -->
-    <joint name="chassis_to_right_wheel" type="revolute">
+    <joint name="right_wheel_joint" type="revolute">
       <parent>chassis</parent>
       <child>right_wheel</child>
       <pose>0 0 0 0 0 0</pose>
@@ -209,7 +209,7 @@
     </joint>
 
     <!-- Joint: chassis to caster ball (ball joint) -->
-    <joint name="chassis_to_caster_ball" type="ball">
+    <joint name="ball_wheel_joint" type="ball">
       <parent>chassis</parent>
       <child>caster_ball</child>
       <pose>0 0 0 0 0 0</pose>

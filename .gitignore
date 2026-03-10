@@ -56,3 +56,6 @@ Thumbs.db
 # Backup files
 *.bak
 *.backup
+
+# Local environment
+.env.local

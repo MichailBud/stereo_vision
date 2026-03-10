@@ -58,6 +58,7 @@
           <cylinder>
             <radius>0.05</radius>
             <length>0.03</length>
+            <pose>1.5708 0 0</pose>
           </cylinder>
         </geometry>
       </collision>
@@ -66,6 +67,7 @@
           <cylinder>
             <radius>0.05</radius>
             <length>0.03</length>
+            <pose>1.5708 0 0</pose>
           </cylinder>
         </geometry>
         <material>
@@ -95,6 +97,7 @@
           <cylinder>
             <radius>0.05</radius>
             <length>0.03</length>
+            <pose>1.5708 0 0</pose>
           </cylinder>
         </geometry>
       </collision>
@@ -103,6 +106,7 @@
           <cylinder>
             <radius>0.05</radius>
             <length>0.03</length>
+            <pose>1.5708 0 0</pose>
           </cylinder>
         </geometry>
         <material>

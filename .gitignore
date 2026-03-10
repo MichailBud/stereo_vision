@@ -41,6 +41,11 @@ __pycache__/
 .ros/
 .gazebo/
 
+# Gazebo
+*.sdf.cache
+*.model.cache
+gazebo_log/
+
 # Logs
 *.log
 

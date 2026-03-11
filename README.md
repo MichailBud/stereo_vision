@@ -63,6 +63,35 @@ source install/setup.bash
 ros2 launch test test_launch.py
 ```
 
+## Управление роботом
+
+Пакет `keyboard_control` позволяет управлять роботом с клавиатуры.
+
+**Доступ к клавиатуре:**
+
+```bash
+# Дать права на устройство ввода (после перезагрузки права сбрасываются)
+sudo chmod 777 /dev/input/by-path/platform-i8042-serio-0-event-kbd
+
+# Или найти своё устройство
+ls -la /dev/input/event*
+sudo chmod 777 /dev/input/eventX  # замени X на номер устройства
+```
+
+**Запуск:**
+
+```bash
+ros2 run keyboard_control keyboard_control_node
+```
+
+**Управление:**
+- **W / ↑** — вперёд
+- **S / ↓** — назад
+- **A / ←** — влево
+- **D / →** — вправо
+
+---
+
 ## Модель робота
 
 Проект включает модель **Robot Cameron** — робот-пылесос с дифференциальным приводом.

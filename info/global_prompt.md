@@ -60,10 +60,10 @@
 - Расположение: спереди, высота 15 см
 
 **ROS2 топики:**
-- `/stereo/left/image_raw`
-- `/stereo/right/image_raw`
-- `/stereo/left/camera_info`
-- `/stereo/right/camera_info`
+- `/left_camera_sensor/image_raw`
+- `/right_camera_sensor/image_raw`
+- `/left_camera_sensor/camera_info`
+- `/right_camera_sensor/camera_info`
 
 ---
 
@@ -82,8 +82,8 @@ gazebo worlds/<имя_мира>.world
 
 # Просмотр топиков
 ros2 topic list
-ros2 topic echo /stereo/left/image_raw
-ros2 topic hz /stereo/left/image_raw
+ros2 topic echo /left_camera_sensor/image_raw
+ros2 topic hz /left_camera_sensor/image_raw
 
 # Git
 git status

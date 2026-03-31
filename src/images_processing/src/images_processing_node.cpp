@@ -26,6 +26,7 @@ public: // Открытая часть
         sgbm_speckle_window_size = declare_parameter<int>("sgbm_speckle_window_size", 50);
         sgbm_speckle_range = declare_parameter<int>("sgbm_speckle_range", 1);
         baseline = declare_parameter<double>("baseline", 0.1);
+        median_matrix_N = declare_parameter<int>("median_matrix_N", 5);
 
         right_cam_pub = image_transport::create_publisher(this, "/right_camera"); // Инициализируем публикатор
         left_cam_pub = image_transport::create_publisher(this, "/left_camera"); // Инициализируем публикатор
@@ -44,8 +45,8 @@ public: // Открытая часть
         timer = this->create_wall_timer(100ms, std::bind(&ImagesProcessing::timer_callback, this));
 
         stereo_sgbm = cv::StereoSGBM::create(
-            sgbm_min_disparity,      // minDisparity — минимальная диспаратность (обычно 0)
-            sgbm_num_disparities,     // numDisparities — количество диспаратностей (кратно 16)
+            sgbm_min_disparity,   // minDisparity — минимальная диспаратность (обычно 0)
+            sgbm_num_disparities,  // Определяет диапазон поиска: [minDisparity, minDisparity +numDisparities).
             sgbm_block_size,      // blockSize — размер окна (нечётное, 5-15)
             sgbm_p1,     // P1 — штраф за изменение диспаратности на 1
             sgbm_p2,     // P2 — штраф за изменение диспаратности > 1
@@ -68,6 +69,9 @@ private:
     int sgbm_speckle_window_size;
     int sgbm_speckle_range;
     double baseline;
+
+    // Параметр размера n матрицы медианного фильтра
+    int median_matrix_N;
 
     rclcpp::TimerBase::SharedPtr timer;
     // Переменные для изображений
@@ -98,8 +102,8 @@ private:
     cv::Mat D_right;
 
     // Преобразование изображений
-    cv::Mat left_map1, left_map2;
-    cv::Mat right_map1, right_map2;
+    cv::Mat left_map_X, left_map_Y;
+    cv::Mat right_map_X, right_map_Y;
 
     cv::Ptr<cv::StereoBM> stereo_bm;
     cv::Ptr<cv::StereoSGBM> stereo_sgbm;
@@ -115,8 +119,8 @@ private:
         }
 
         cv::Mat left_rect, right_rect;
-        cv::remap(image_left, left_rect, left_map1, left_map2, cv::INTER_LINEAR);
-        cv::remap(image_right, right_rect, right_map1, right_map2, cv::INTER_LINEAR);
+        cv::remap(image_left, left_rect, left_map_X, left_map_Y, cv::INTER_LINEAR);
+        cv::remap(image_right, right_rect, right_map_X, right_map_Y, cv::INTER_LINEAR);
 
         // stereo_bm = cv::StereoBM::create(
         //     64,   // numDisparities - количество диспаратностей (должно быть кратно 16)
@@ -145,21 +149,13 @@ private:
 
         // Применяем медианный фильтр для удаления шума соль-перец
         cv::Mat disparity_denoised;
-        cv::medianBlur(disparity_normalized, disparity_denoised, 5);  // Размер 5x5
+        cv::medianBlur(disparity_normalized, disparity_denoised, median_matrix_N);  // Размер 5x5
 
 
         // Создание header с текущим временем
         std_msgs::msg::Header header;
         header.stamp = this->now();
         header.frame_id = "camera_frame";
-
-        // sensor_msgs::msg::Image::SharedPtr msg_tx = // Нами создаётся объект message, который представляет из себя сообщение с изображением
-        //     cv_bridge::CvImage(header, "rgb8", left_rect).toImageMsg(); // Копируем header из входного сообщения, кодировка mono8 для grayscale
-        // left_cam_pub.publish(msg_tx); // Публикуем наше сообщение
-
-        // msg_tx =
-        //     cv_bridge::CvImage(header, "rgb8", right_rect).toImageMsg();
-        // right_cam_pub.publish(msg_tx); // Публикуем наше сообщение
 
         auto disparity_msg = cv_bridge::CvImage(header, "mono8", disparity_denoised).toImageMsg();
         disparity_pub.publish(disparity_msg);
@@ -169,9 +165,22 @@ private:
         image_right_rx = false;
     }
 
+    void publish_images(){
+        std_msgs::msg::Header header;
+        header.stamp = this->now();
+        header.frame_id = "camera_frame";
+
+        sensor_msgs::msg::Image::SharedPtr msg_tx = // Нами создаётся объект message, который представляет из себя сообщение с изображением
+            cv_bridge::CvImage(header, "rgb8", image_left).toImageMsg(); // Копируем header из входного сообщения, кодировка mono8 для grayscale
+        left_cam_pub.publish(msg_tx); // Публикуем наше сообщение
+
+        msg_tx = cv_bridge::CvImage(header, "rgb8", image_right).toImageMsg();
+        right_cam_pub.publish(msg_tx); // Публикуем наше сообщение
+    }
+
     void init_rectification_maps() {
-        cv::initUndistortRectifyMap(K_left, D_left, R_left, P_left, cv::Size(640, 480), CV_32FC1, left_map1, left_map2);
-        cv::initUndistortRectifyMap(K_right, D_right, R_right, P_right, cv::Size(640, 480), CV_32FC1, right_map1, right_map2);
+        cv::initUndistortRectifyMap(K_left, D_left, R_left, P_left, cv::Size(640, 480), CV_32FC1, left_map_X, left_map_Y);
+        cv::initUndistortRectifyMap(K_right, D_right, R_right, P_right, cv::Size(640, 480), CV_32FC1, right_map_X, right_map_Y);
         RCLCPP_INFO(this->get_logger(), "Rectification maps инициализированы");
         }
 

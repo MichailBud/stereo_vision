@@ -6,6 +6,7 @@
 #include <geometry_msgs/msg/point.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <std_msgs/msg/header.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
 
 using namespace std::chrono_literals;   // Для упращения написания литералов
 
@@ -31,6 +32,7 @@ public: // Открытая часть
         right_cam_pub = image_transport::create_publisher(this, "/right_camera"); // Инициализируем публикатор
         left_cam_pub = image_transport::create_publisher(this, "/left_camera"); // Инициализируем публикатор
         disparity_pub = image_transport::create_publisher(this, "/disparity");
+        pointcloud_pub = this->create_publisher<sensor_msgs::msg::PointCloud2>("/point_cloud2", 10);
 
 
         left_cam_sub = image_transport::create_subscription(this, "/left_camera_sensor/image_raw",
@@ -42,7 +44,7 @@ public: // Открытая часть
             "/left_camera_sensor/camera_info", 10, std::bind(&ImagesProcessing::left_info_callback,
                       this,
                       std::placeholders::_1));
-        timer = this->create_wall_timer(100ms, std::bind(&ImagesProcessing::timer_callback, this));
+        timer = this->create_wall_timer(200ms, std::bind(&ImagesProcessing::timer_callback, this));
 
         stereo_sgbm = cv::StereoSGBM::create(
             sgbm_min_disparity,   // minDisparity — минимальная диспаратность (обычно 0)
@@ -86,6 +88,8 @@ private:
     image_transport::Publisher left_cam_pub; // Создаём публикатор для изображения
     image_transport::Publisher right_cam_pub; // Создаём публикатор для изображения
     image_transport::Publisher disparity_pub; // Публикатор для карты диспарантности
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pointcloud_pub;
+
     image_transport::Subscriber left_cam_sub; // Подписчик
     image_transport::Subscriber right_cam_sub; // Подписчик
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_cam_info_sub; // Подписчик
@@ -122,22 +126,10 @@ private:
         cv::remap(image_left, left_rect, left_map_X, left_map_Y, cv::INTER_LINEAR);
         cv::remap(image_right, right_rect, right_map_X, right_map_Y, cv::INTER_LINEAR);
 
-        // stereo_bm = cv::StereoBM::create(
-        //     64,   // numDisparities - количество диспаратностей (должно быть кратно 16)
-        //     11    // blockSize - размер окна поиска (нечётное: 5, 7, 9, 11, 15...)
-        //  );
-
-
-
-
         // Конвертация в grayscale для stereo matching
         cv::Mat left_gray, right_gray;
         cv::cvtColor(left_rect, left_gray, cv::COLOR_RGB2GRAY);
         cv::cvtColor(right_rect, right_gray, cv::COLOR_RGB2GRAY);
-
-        // cv::Mat left_gray, right_gray;
-        // cv::cvtColor(image_left, left_gray, cv::COLOR_RGB2GRAY);
-        // cv::cvtColor(image_right, right_gray, cv::COLOR_RGB2GRAY);
 
         // Вычисление диспаратности
         stereo_sgbm->compute(left_gray, right_gray, disparity);
@@ -149,7 +141,7 @@ private:
 
         // Применяем медианный фильтр для удаления шума соль-перец
         cv::Mat disparity_denoised;
-        cv::medianBlur(disparity_normalized, disparity_denoised, median_matrix_N);  // Размер 5x5
+        cv::medianBlur(disparity_normalized, disparity_denoised, median_matrix_N);
 
 
         // Создание header с текущим временем
@@ -160,9 +152,79 @@ private:
         auto disparity_msg = cv_bridge::CvImage(header, "mono8", disparity_denoised).toImageMsg();
         disparity_pub.publish(disparity_msg);
 
+        triangulation_pointcloud();
 
         image_left_rx = false;
         image_right_rx = false;
+    }
+
+    void triangulation_pointcloud(){
+        // Параметры из калибровки
+        double fx = K_left.at<double>(0, 0);
+        double fy = K_left.at<double>(1, 1);
+        double cx = K_left.at<double>(0, 2);
+        double cy = K_left.at<double>(1, 2);
+        double B = baseline;
+
+        // Конвертируем disparity из CV_16S в CV_8U для медианного фильтра
+        cv::Mat disparity_8u;
+        disparity.convertTo(disparity_8u, CV_8U, 1.0/16.0);
+        
+        cv::Mat disparity_denoised;
+        cv::medianBlur(disparity_8u, disparity_denoised, median_matrix_N);
+
+        // Создаём сообщение PointCloud2
+        sensor_msgs::msg::PointCloud2::SharedPtr cloud_msg =
+        std::make_shared<sensor_msgs::msg::PointCloud2>();
+
+        std_msgs::msg::Header header;
+        header.stamp = this->now();
+        header.frame_id = "camera_frame";
+
+        cloud_msg->header = header;
+        cloud_msg->height = disparity_denoised.rows;
+        cloud_msg->width = disparity_denoised.cols;
+        cloud_msg->is_dense = false;
+
+        // Настраиваем поля (x, y, z)
+        sensor_msgs::msg::PointField field;
+        field.name = "x"; field.offset = 0; field.datatype = sensor_msgs::msg::PointField::FLOAT32; field.count = 1;
+        cloud_msg->fields.push_back(field);
+        field.name = "y"; field.offset = 4; field.datatype = sensor_msgs::msg::PointField::FLOAT32; field.count = 1;
+        cloud_msg->fields.push_back(field);
+        field.name = "z"; field.offset = 8; field.datatype = sensor_msgs::msg::PointField::FLOAT32; field.count = 1;
+        cloud_msg->fields.push_back(field);
+        cloud_msg->point_step = 12;  // 3 float * 4 bytes
+        cloud_msg->row_step = cloud_msg->point_step * cloud_msg->width;
+        cloud_msg->data.resize(cloud_msg->height * cloud_msg->row_step);
+
+        // Заполняем точки
+        for (int v = 0; v < disparity_denoised.rows; v++) {
+            for (int u = 0; u < disparity_denoised.cols; u++) {
+                short disp_raw = disparity_denoised.at<short>(v, u);
+
+                if (disp_raw <= 0) {
+                    // Невалидная точка
+                    continue;
+                }
+
+                float disp = disp_raw / 16.0f;
+                float Z = (B * fx) / disp;
+                float X = (u - cx) * Z / fx;
+                float Y = (v - cy) * Z / fy;
+
+                // Индекс в буфере
+                int idx = v * cloud_msg->row_step + u * cloud_msg->point_step;
+
+                // Записываем координаты
+                memcpy(&cloud_msg->data[idx + 0], &X, sizeof(float));
+                memcpy(&cloud_msg->data[idx + 4], &Y, sizeof(float));
+                memcpy(&cloud_msg->data[idx + 8], &Z, sizeof(float));
+                }
+            }
+
+        pointcloud_pub->publish(*cloud_msg);
+
     }
 
     void publish_images(){

@@ -32,4 +32,8 @@ ament_target_dependencies(${PROJECT_NAME}_node rclcpp cv_bridge image_transport 
 install(TARGETS
         ${PROJECT_NAME}_node
         DESTINATION lib/${PROJECT_NAME})
+install(
+    DIRECTORY launch
+    DESTINATION share/${PROJECT_NAME}
+)
 ament_package()

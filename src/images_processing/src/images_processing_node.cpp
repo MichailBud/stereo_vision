@@ -15,6 +15,18 @@ public: // Открытая часть
     ImagesProcessing(): // Конструктор класса
         Node("images_processing_node")   // Инициализация Node, в котором приводится уникальное название узла
     {
+        // Объявление параметров
+        sgbm_min_disparity = declare_parameter<int>("sgbm_min_disparity", 0);
+        sgbm_num_disparities = declare_parameter<int>("sgbm_num_disparities", 48);
+        sgbm_block_size = declare_parameter<int>("sgbm_block_size", 5);
+        sgbm_p1 = declare_parameter<int>("sgbm_p1", 8 * 5 * 5);
+        sgbm_p2 = declare_parameter<int>("sgbm_p2", 32 * 5 * 5);
+        sgbm_disp12_max_diff = declare_parameter<int>("sgbm_disp12_max_diff", 10);
+        sgbm_uniqueness_ratio = declare_parameter<int>("sgbm_uniqueness_ratio", 10);
+        sgbm_speckle_window_size = declare_parameter<int>("sgbm_speckle_window_size", 50);
+        sgbm_speckle_range = declare_parameter<int>("sgbm_speckle_range", 1);
+        baseline = declare_parameter<double>("baseline", 0.1);
+
         right_cam_pub = image_transport::create_publisher(this, "/right_camera"); // Инициализируем публикатор
         left_cam_pub = image_transport::create_publisher(this, "/left_camera"); // Инициализируем публикатор
         disparity_pub = image_transport::create_publisher(this, "/disparity");
@@ -30,9 +42,33 @@ public: // Открытая часть
                       this,
                       std::placeholders::_1));
         timer = this->create_wall_timer(100ms, std::bind(&ImagesProcessing::timer_callback, this));
+
+        stereo_sgbm = cv::StereoSGBM::create(
+            sgbm_min_disparity,      // minDisparity — минимальная диспаратность (обычно 0)
+            sgbm_num_disparities,     // numDisparities — количество диспаратностей (кратно 16)
+            sgbm_block_size,      // blockSize — размер окна (нечётное, 5-15)
+            sgbm_p1,     // P1 — штраф за изменение диспаратности на 1
+            sgbm_p2,     // P2 — штраф за изменение диспаратности > 1
+            sgbm_disp12_max_diff,      // disp12MaxDiff — максимальная разница влево/вправо
+            sgbm_uniqueness_ratio,    // uniquenessRatio — минимальный процент уникальности
+            sgbm_speckle_window_size,  // speckleWindowSize — размер speckle фильтра
+            sgbm_speckle_range      // speckleRange — диапазон speckle фильтра
+            );
     }
 
 private:
+    // Параметры SGBM
+    int sgbm_min_disparity;
+    int sgbm_num_disparities;
+    int sgbm_block_size;
+    int sgbm_p1;
+    int sgbm_p2;
+    int sgbm_disp12_max_diff;
+    int sgbm_uniqueness_ratio;
+    int sgbm_speckle_window_size;
+    int sgbm_speckle_range;
+    double baseline;
+
     rclcpp::TimerBase::SharedPtr timer;
     // Переменные для изображений
     cv::Mat image_left;
@@ -42,8 +78,6 @@ private:
     bool image_right_rx = false;
     // Флаг, сообщающий что информация о камерах получена
     bool left_info_rx = false;
-    // Флаг, сообщающий что карты ректификации инициализированы
-    bool maps_initialized = false;
 
     image_transport::Publisher left_cam_pub; // Создаём публикатор для изображения
     image_transport::Publisher right_cam_pub; // Создаём публикатор для изображения
@@ -52,7 +86,7 @@ private:
     image_transport::Subscriber right_cam_sub; // Подписчик
     rclcpp::Subscription<sensor_msgs::msg::CameraInfo>::SharedPtr left_cam_info_sub; // Подписчик
 
-    double baseline = 0.1;
+    // Параметры камер левой и правой из топика
     cv::Mat K_left;
     cv::Mat R_left;
     cv::Mat P_left;
@@ -63,10 +97,13 @@ private:
     cv::Mat P_right;
     cv::Mat D_right;
 
+    // Преобразование изображений
     cv::Mat left_map1, left_map2;
     cv::Mat right_map1, right_map2;
 
     cv::Ptr<cv::StereoBM> stereo_bm;
+    cv::Ptr<cv::StereoSGBM> stereo_sgbm;
+
     cv::Mat disparity;
 
 
@@ -81,24 +118,34 @@ private:
         cv::remap(image_left, left_rect, left_map1, left_map2, cv::INTER_LINEAR);
         cv::remap(image_right, right_rect, right_map1, right_map2, cv::INTER_LINEAR);
 
-        stereo_bm = cv::StereoBM::create(
-            64,   // numDisparities — количество диспаратностей (должно быть кратно 16)
-            11    // blockSize — размер окна поиска (нечётное: 5, 7, 9, 11, 15...)
-         );
+        // stereo_bm = cv::StereoBM::create(
+        //     64,   // numDisparities - количество диспаратностей (должно быть кратно 16)
+        //     11    // blockSize - размер окна поиска (нечётное: 5, 7, 9, 11, 15...)
+        //  );
+
+
+
 
         // Конвертация в grayscale для stereo matching
         cv::Mat left_gray, right_gray;
         cv::cvtColor(left_rect, left_gray, cv::COLOR_RGB2GRAY);
         cv::cvtColor(right_rect, right_gray, cv::COLOR_RGB2GRAY);
 
+        // cv::Mat left_gray, right_gray;
+        // cv::cvtColor(image_left, left_gray, cv::COLOR_RGB2GRAY);
+        // cv::cvtColor(image_right, right_gray, cv::COLOR_RGB2GRAY);
+
         // Вычисление диспаратности
-        stereo_bm->compute(left_gray, right_gray, disparity);
+        stereo_sgbm->compute(left_gray, right_gray, disparity);
+
 
         // Нормализация для визуализации (опционально)
         cv::Mat disparity_normalized;
         cv::normalize(disparity, disparity_normalized, 0, 255, cv::NORM_MINMAX, CV_8U);
 
-
+        // Применяем медианный фильтр для удаления шума соль-перец
+        cv::Mat disparity_denoised;
+        cv::medianBlur(disparity_normalized, disparity_denoised, 5);  // Размер 5x5
 
 
         // Создание header с текущим временем
@@ -106,15 +153,15 @@ private:
         header.stamp = this->now();
         header.frame_id = "camera_frame";
 
-        sensor_msgs::msg::Image::SharedPtr msg_tx = // Нами создаётся объект message, который представляет из себя сообщение с изображением
-            cv_bridge::CvImage(header, "rgb8", left_rect).toImageMsg(); // Копируем header из входного сообщения, кодировка mono8 для grayscale
-        left_cam_pub.publish(msg_tx); // Публикуем наше сообщение
+        // sensor_msgs::msg::Image::SharedPtr msg_tx = // Нами создаётся объект message, который представляет из себя сообщение с изображением
+        //     cv_bridge::CvImage(header, "rgb8", left_rect).toImageMsg(); // Копируем header из входного сообщения, кодировка mono8 для grayscale
+        // left_cam_pub.publish(msg_tx); // Публикуем наше сообщение
 
-        msg_tx =
-            cv_bridge::CvImage(header, "rgb8", right_rect).toImageMsg();
-        right_cam_pub.publish(msg_tx); // Публикуем наше сообщение
+        // msg_tx =
+        //     cv_bridge::CvImage(header, "rgb8", right_rect).toImageMsg();
+        // right_cam_pub.publish(msg_tx); // Публикуем наше сообщение
 
-        auto disparity_msg = cv_bridge::CvImage(header, "mono8", disparity_normalized).toImageMsg();
+        auto disparity_msg = cv_bridge::CvImage(header, "mono8", disparity_denoised).toImageMsg();
         disparity_pub.publish(disparity_msg);
 
 

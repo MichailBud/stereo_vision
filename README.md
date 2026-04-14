@@ -54,7 +54,7 @@ stereo_vision/
 ### ✅ Обработка стереоизображений
 - Публикация выпрямленных изображений с левой и правой камеры
 - Вычисление карты диспаратности алгоритмом **StereoSGBM**
-- Фильтрация шума (медианный фильтр, speckle-фильтрация)
+- Встроенная speckle-фильтрация SGBM
 
 ### ✅ Настроенные параметры SGBM
 | Параметр | Значение | Описание |
@@ -62,18 +62,19 @@ stereo_vision/
 | `min_disparity` | 0 | Минимальная диспаратность |
 | `num_disparities` | 64 | Диапазон поиска (кратно 16) |
 | `block_size` | 7 | Размер окна сопоставления |
-| `P1` | 50 | Штраф за изменение на ±1 |
-| `P2` | 100 | Штраф за изменение > ±1 |
+| `P1` | 20 | Штраф за изменение на ±1 |
+| `P2` | 70 | Штраф за изменение > ±1 |
 | `disp12_max_diff` | 10 | Left-right проверка |
 | `uniqueness_ratio` | 10 | Фильтр уникальности |
-| `speckle_window_size` | 50 | Размер speckle-окна |
-| `speckle_range` | 1 | Диапазон speckle |
-| `median_matrix_N` | 13 | Размер медианного фильтра |
+| `speckle_window_size` | 75 | Размер speckle-окна |
+| `speckle_range` | 4 | Диапазон speckle |
 
 ### ✅ 3D реконструкция
 - Триангуляция точек по карте диспаратности
-- Публикация облака точек (`/point_cloud`)
+- Публикация облака точек (`/point_cloud2`)
 - Визуализация в RViz
+
+> **Важно:** OpenCV StereoSGBM возвращает disparity в формате `CV_16S` с субпиксельной точностью 1/16 (значения умножены на 16). При вычислении 3D-координат disparity делится на 16.0 для получения корректного масштаба в метрах: `Z = (B * fx) / (disp / 16.0)`.
 
 ### ✅ Топики
 | Топик | Тип | Описание |
@@ -81,7 +82,7 @@ stereo_vision/
 | `/left_camera` | `sensor_msgs/Image` | Выпрямленное левое изображение |
 | `/right_camera` | `sensor_msgs/Image` | Выпрямленное правое изображение |
 | `/disparity` | `sensor_msgs/Image` | Карта диспаратности (нормализованная) |
-| `/point_cloud` | `sensor_msgs/PointCloud2` | 3D облако точек |
+| `/point_cloud2` | `sensor_msgs/PointCloud2` | 3D облако точек |
 
 ---
 
@@ -94,7 +95,7 @@ rviz2
 
 Добавьте displays:
 - **Image** → Topic: `/disparity`
-- **PointCloud2** → Topic: `/point_cloud`, Fixed Frame: `camera_frame`
+- **PointCloud2** → Topic: `/point_cloud2`, Fixed Frame: `camera_frame`
 
 ## Требования
 

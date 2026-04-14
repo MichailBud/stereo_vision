@@ -27,7 +27,6 @@ public: // Открытая часть
         sgbm_speckle_window_size = declare_parameter<int>("sgbm_speckle_window_size", 50);
         sgbm_speckle_range = declare_parameter<int>("sgbm_speckle_range", 1);
         baseline = declare_parameter<double>("baseline", 0.1);
-        median_matrix_N = declare_parameter<int>("median_matrix_N", 5);
 
         right_cam_pub = image_transport::create_publisher(this, "/right_camera"); // Инициализируем публикатор
         left_cam_pub = image_transport::create_publisher(this, "/left_camera"); // Инициализируем публикатор
@@ -44,7 +43,7 @@ public: // Открытая часть
             "/left_camera_sensor/camera_info", 10, std::bind(&ImagesProcessing::left_info_callback,
                       this,
                       std::placeholders::_1));
-        timer = this->create_wall_timer(200ms, std::bind(&ImagesProcessing::timer_callback, this));
+        timer = this->create_wall_timer(100ms, std::bind(&ImagesProcessing::timer_callback, this));
 
         stereo_sgbm = cv::StereoSGBM::create(
             sgbm_min_disparity,   // minDisparity — минимальная диспаратность (обычно 0)
@@ -71,9 +70,6 @@ private:
     int sgbm_speckle_window_size;
     int sgbm_speckle_range;
     double baseline;
-
-    // Параметр размера n матрицы медианного фильтра
-    int median_matrix_N;
 
     rclcpp::TimerBase::SharedPtr timer;
     // Переменные для изображений
@@ -133,23 +129,21 @@ private:
 
         // Вычисление диспаратности
         stereo_sgbm->compute(left_gray, right_gray, disparity);
+        // Матрица со значениями CV_16S (16-битный знаковый целочисленный тип)
+        // Значения умножены на 16, для сохранения дробной части,\
+        // Обеспечивая субпиксельную точность 1/16 пикселя
 
 
-        // Нормализация для визуализации (опционально)
+        // Нормализация для визуализации
         cv::Mat disparity_normalized;
         cv::normalize(disparity, disparity_normalized, 0, 255, cv::NORM_MINMAX, CV_8U);
-
-        // Применяем медианный фильтр для удаления шума соль-перец
-        cv::Mat disparity_denoised;
-        cv::medianBlur(disparity_normalized, disparity_denoised, median_matrix_N);
-
 
         // Создание header с текущим временем
         std_msgs::msg::Header header;
         header.stamp = this->now();
         header.frame_id = "camera_frame";
 
-        auto disparity_msg = cv_bridge::CvImage(header, "mono8", disparity_denoised).toImageMsg();
+        auto disparity_msg = cv_bridge::CvImage(header, "mono8", disparity_normalized).toImageMsg();
         disparity_pub.publish(disparity_msg);
 
         triangulation_pointcloud();
@@ -166,13 +160,6 @@ private:
         double cy = K_left.at<double>(1, 2);
         double B = baseline;
 
-        // Конвертируем disparity из CV_16S в CV_8U для медианного фильтра
-        cv::Mat disparity_8u;
-        disparity.convertTo(disparity_8u, CV_8U, 1.0/16.0);
-        
-        cv::Mat disparity_denoised;
-        cv::medianBlur(disparity_8u, disparity_denoised, median_matrix_N);
-
         // Создаём сообщение PointCloud2
         sensor_msgs::msg::PointCloud2::SharedPtr cloud_msg =
         std::make_shared<sensor_msgs::msg::PointCloud2>();
@@ -182,8 +169,8 @@ private:
         header.frame_id = "camera_frame";
 
         cloud_msg->header = header;
-        cloud_msg->height = disparity_denoised.rows;
-        cloud_msg->width = disparity_denoised.cols;
+        cloud_msg->height = disparity.rows;
+        cloud_msg->width = disparity.cols;
         cloud_msg->is_dense = false;
 
         // Настраиваем поля (x, y, z)
@@ -199,23 +186,25 @@ private:
         cloud_msg->data.resize(cloud_msg->height * cloud_msg->row_step);
 
         // Заполняем точки
-        for (int v = 0; v < disparity_denoised.rows; v++) {
-            for (int u = 0; u < disparity_denoised.cols; u++) {
-                short disp_raw = disparity_denoised.at<short>(v, u);
+        for (int v = 0; v < disparity.rows; v++) {
+            for (int u = 0; u < disparity.cols; u++) {
+                short disp_raw = disparity.at<short>(v, u);
 
                 if (disp_raw <= 0) {
                     // Невалидная точка
                     continue;
                 }
 
+                // SGBM возвращает disparity с субпиксельной точностью 1/16,
+                // поэтому делим на 16.0f для получения реального значения в пикселях
                 float disp = disp_raw / 16.0f;
-                float Z = (B * fx) / disp;
-                float X = (u - cx) * Z / fx;
-                float Y = (v - cy) * Z / fy;
+                float Z = ((B * fx) / disp);
+                float X = ((u - cx) * Z / fx);
+                float Y = ((v - cy) * Z / fy);
 
                 // Индекс в буфере
                 int idx = v * cloud_msg->row_step + u * cloud_msg->point_step;
-
+                // RCLCPP_INFO_STREAM(this->get_logger(), "X: "<<X<<", Y: "<<Y<<", Z: "<<Z);
                 // Записываем координаты
                 memcpy(&cloud_msg->data[idx + 0], &X, sizeof(float));
                 memcpy(&cloud_msg->data[idx + 4], &Y, sizeof(float));

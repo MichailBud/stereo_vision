@@ -12,6 +12,12 @@ public:
     KeyboardTeleop()
         : Node("keyboard_teleop")
     {
+        // Объявление параметров
+        this->declare_parameter<double>("move_speed", 0.5);
+        this->declare_parameter<double>("rotate_speed", 0.5);
+        robot_move_speed = this->get_parameter("move_speed").as_double();
+        robot_rotate_speed = this->get_parameter("rotate_speed").as_double();
+
         // Инициализация публикатора
         cmd_pub = this->create_publisher<geometry_msgs::msg::Twist>("/cmd_vel", 10);
 

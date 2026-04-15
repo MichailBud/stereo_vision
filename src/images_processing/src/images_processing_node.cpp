@@ -1,5 +1,5 @@
-#include <rclcpp/rclcpp.hpp> // Подключение заголовочного файла, который относитсяк клиентской библиотеке rclcpp. Это ROS client library, который беспечивает нам функционал ROS 2 в исходном коде на языке C++
-#include <sensor_msgs/msg/image.hpp> // Подключили тип сообщения - изображение
+#include <rclcpp/rclcpp.hpp>
+#include <sensor_msgs/msg/image.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <image_transport/image_transport.hpp>
 #include <opencv2/opencv.hpp>
@@ -7,6 +7,8 @@
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <std_msgs/msg/header.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <limits>
+
 
 using namespace std::chrono_literals;   // Для упращения написания литералов
 
@@ -27,6 +29,8 @@ public: // Открытая часть
         sgbm_speckle_window_size = declare_parameter<int>("sgbm_speckle_window_size", 50);
         sgbm_speckle_range = declare_parameter<int>("sgbm_speckle_range", 1);
         baseline = declare_parameter<double>("baseline", 0.1);
+        morph_kernel_size = declare_parameter<int>("morph_kernel_size", 3);
+        camera_height = declare_parameter<double>("camera_height", 0.155);
 
         right_cam_pub = image_transport::create_publisher(this, "/right_camera"); // Инициализируем публикатор
         left_cam_pub = image_transport::create_publisher(this, "/left_camera"); // Инициализируем публикатор
@@ -70,6 +74,12 @@ private:
     int sgbm_speckle_window_size;
     int sgbm_speckle_range;
     double baseline;
+
+    // Параметр высоты камеры над полом
+    double camera_height;
+
+    // Параметр размера ядра морфологических операций
+    int morph_kernel_size;
 
     rclcpp::TimerBase::SharedPtr timer;
     // Переменные для изображений
@@ -133,10 +143,18 @@ private:
         // Значения умножены на 16, для сохранения дробной части,\
         // Обеспечивая субпиксельную точность 1/16 пикселя
 
+        // Медианный фильтр для удаления импульсных выбросов
+        cv::medianBlur(disparity, disparity, 5);
+
+        // Эрозия + дилатация (закрытие) для удаления шума и заполнения дыр
+        applyMorphologicalClosing(disparity, morph_kernel_size);
+
 
         // Нормализация для визуализации
         cv::Mat disparity_normalized;
         cv::normalize(disparity, disparity_normalized, 0, 255, cv::NORM_MINMAX, CV_8U);
+
+
 
         // Создание header с текущим временем
         std_msgs::msg::Header header;
@@ -159,6 +177,10 @@ private:
         double cx = K_left.at<double>(0, 2);
         double cy = K_left.at<double>(1, 2);
         double B = baseline;
+
+        // Допустимый диапазон глубины
+        const float Z_min = 0.83f;
+        const float Z_max = 15.0f;
 
         // Создаём сообщение PointCloud2
         sensor_msgs::msg::PointCloud2::SharedPtr cloud_msg =
@@ -185,13 +207,20 @@ private:
         cloud_msg->row_step = cloud_msg->point_step * cloud_msg->width;
         cloud_msg->data.resize(cloud_msg->height * cloud_msg->row_step);
 
-        // Заполняем точки
+        // Инициализируем всё облако NaN-значениями
+        const float nan_val = std::numeric_limits<float>::quiet_NaN();
+        for (size_t i = 0; i < cloud_msg->data.size(); i += 12) {
+            memcpy(&cloud_msg->data[i + 0], &nan_val, sizeof(float));
+            memcpy(&cloud_msg->data[i + 4], &nan_val, sizeof(float));
+            memcpy(&cloud_msg->data[i + 8], &nan_val, sizeof(float));
+        }
+
+        // Заполняем только валидные точки
         for (int v = 0; v < disparity.rows; v++) {
             for (int u = 0; u < disparity.cols; u++) {
                 short disp_raw = disparity.at<short>(v, u);
 
                 if (disp_raw <= 0) {
-                    // Невалидная точка
                     continue;
                 }
 
@@ -199,12 +228,23 @@ private:
                 // поэтому делим на 16.0f для получения реального значения в пикселях
                 float disp = disp_raw / 16.0f;
                 float Z = ((B * fx) / disp);
+
+                // Отсекаем точки вне рабочего диапазона глубины
+                if (Z < Z_min || Z > Z_max) {
+                    continue;
+                }
+
                 float X = ((u - cx) * Z / fx);
                 float Y = ((v - cy) * Z / fy);
 
+                // Отсекаем точки ниже уровня пола (шум под полом)
+                // При roll=-1.57 ось Y камеры направлена вниз, пол на Y ≈ camera_height
+                if (Y > camera_height) {
+                    continue;
+                }
+
                 // Индекс в буфере
                 int idx = v * cloud_msg->row_step + u * cloud_msg->point_step;
-                // RCLCPP_INFO_STREAM(this->get_logger(), "X: "<<X<<", Y: "<<Y<<", Z: "<<Z);
                 // Записываем координаты
                 memcpy(&cloud_msg->data[idx + 0], &X, sizeof(float));
                 memcpy(&cloud_msg->data[idx + 4], &Y, sizeof(float));
@@ -213,7 +253,20 @@ private:
             }
 
         pointcloud_pub->publish(*cloud_msg);
+        RCLCPP_DEBUG(get_logger(), "Опубликовано облако точек: %dx%d", cloud_msg->width, cloud_msg->height);
+    }
 
+    void applyMorphologicalClosing(cv::Mat& disparity, int kernel_size) {
+        cv::Mat kernel = cv::getStructuringElement(
+            cv::MORPH_ELLIPSE,
+            cv::Size(kernel_size, kernel_size)
+            );
+
+        cv::Mat temp;
+        // Эрозия — удаляет мелкие шумовые выбросы
+        cv::erode(disparity, temp, kernel);
+        // Дилатация — восстанавливает границы и заполняет дыры
+        cv::dilate(temp, disparity, kernel);
     }
 
     void publish_images(){

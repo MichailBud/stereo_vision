@@ -38,8 +38,6 @@ public:
             return;
         }
         timer = this->create_wall_timer(20ms, std::bind(&KeyboardTeleop::timer_callback, this));
-
-        RCLCPP_INFO(this->get_logger(), "Используйте W/A/S/D для управления");
     }
 
     ~KeyboardTeleop(){
@@ -54,10 +52,8 @@ public:
 
                 switch (ev.value) {
                 case 0:
-                    RCLCPP_INFO_STREAM(this->get_logger(), "Клавиша " << ev.code << " отпущена.");
                     break;
                 case 1:
-                    RCLCPP_INFO_STREAM(this->get_logger(), "Клавиша " << ev.code << " нажата."<< robot_move<< " "<< robot_rotate);
                     if (ev.code == 17 or ev.code == 103) {
                         if (!robot_move) robot_move = 1;
                         else robot_move = 0;
@@ -76,7 +72,6 @@ public:
                     }
                     break;
                 case 2:
-                    RCLCPP_INFO_STREAM(this->get_logger(), "Клавиша " << ev.code << " удерживается.");
                     break;
                 }
             }

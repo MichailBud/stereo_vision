@@ -37,14 +37,19 @@ stereo_vision/
 ├── info/            # Дополнительная информация и документация
 └── src/             # ROS2 пакеты
     ├── images_processing/   # Обработка стереопары, SGBM, карта диспаратности,
-    │   │                    # 3D реконструкция, фильтрация облака точек
+    │   │                    # 3D реконструкция
     │   ├── src/             # Исходный код узла
     │   ├── launch/          # Launch-файлы с параметрами
     │   └── CMakeLists.txt
-    ├── icp_processing/      # 3D ICP одометрия по облаку точек
+    ├── pointcloud_filter/   # Фильтрация облака точек (VoxelGrid + SOR)
     │   ├── src/             # Исходный код узла
     │   ├── launch/          # Launch-файлы с параметрами
     │   └── CMakeLists.txt
+    ├── icp_slam/            # ICP SLAM с EKF (глобальная карта + локализация)
+    │   ├── src/             # Исходный код узла
+    │   ├── launch/          # Launch-файлы с параметрами
+    │   └── CMakeLists.txt
+    ├── wheel_odometry/      # Одометрия колёс робота
     ├── keyboard_control/    # Управление роботом с клавиатуры
     ├── world_gen/           # Запуск Gazebo и спавн робота
     └── test/                # Тестовый пакет
@@ -58,19 +63,32 @@ stereo_vision/
 - Публикация выпрямленных изображений с левой и правой камеры
 - Вычисление карты диспаратности алгоритмом **StereoSGBM**
 - Встроенная speckle-фильтрация SGBM
+- **Проверка синхронности кадров** — кадры с разницей > 50мс отбрасываются
+
+### ⚠️ Фильтрация карты диспаратности (НЕ ИСПОЛЬЗУЕТСЯ)
+
+Медианный фильтр и морфологическое закрытие **отключены** для повышения производительности:
+
+```cpp
+// Медианный фильтр для удаления импульсных выбросов
+// cv::medianBlur(disparity, disparity, 5);
+
+// Эрозия + дилатация (закрытие) для удаления шума и заполнения дыр
+// applyMorphologicalClosing(disparity, morph_kernel_size);
+```
 
 ### ✅ Настроенные параметры SGBM
 | Параметр | Значение | Описание |
 |----------|----------|----------|
-| `min_disparity` | 0 | Минимальная диспаратность |
-| `num_disparities` | 64 | Диапазон поиска (кратно 16) |
-| `block_size` | 7 | Размер окна сопоставления |
-| `P1` | 20 | Штраф за изменение на ±1 |
-| `P2` | 70 | Штраф за изменение > ±1 |
-| `disp12_max_diff` | 5 | Left-right проверка |
-| `uniqueness_ratio` | 15 | Фильтр уникальности |
-| `speckle_window_size` | 75 | Размер speckle-окна |
-| `speckle_range` | 4 | Диапазон speckle |
+| `sgbm_min_disparity` | 0 | Минимальная диспаратность |
+| `sgbm_num_disparities` | 64 | Диапазон поиска (кратно 16) |
+| `sgbm_block_size` | 7 | Размер окна сопоставления |
+| `sgbm_p1` | 20 | Штраф за изменение на ±1 |
+| `sgbm_p2` | 70 | Штраф за изменение > ±1 |
+| `sgbm_disp12_max_diff` | 5 | Left-right проверка |
+| `sgbm_uniqueness_ratio` | 15 | Фильтр уникальности |
+| `sgbm_speckle_window_size` | 75 | Размер speckle-окна |
+| `sgbm_speckle_range` | 4 | Диапазон speckle |
 
 ### ✅ 3D реконструкция
 - Триангуляция точек по карте диспаратности
@@ -79,66 +97,85 @@ stereo_vision/
 
 > **Важно:** OpenCV StereoSGBM возвращает disparity в формате `CV_16S` с субпиксельной точностью 1/16 (значения умножены на 16). При вычислении 3D-координат disparity делится на 16.0 для получения корректного масштаба в метрах: `Z = (B * fx) / (disp / 16.0)`.
 
-### ✅ Фильтрация карты диспаратности
+### ✅ Фильтрация облака точек (pointcloud_filter)
 
-После вычисления disparity применяется многоэтапная фильтрация:
+| Этап | Описание |
+|------|----------|
+| 1. Удаление NaN/нулей | Отбрасываются точки с NaN координатами или нулевыми значениями |
+| 2. VoxelGrid | Downsampling (по умолчанию leaf=0.1) |
+| 3. SOR | Statistical Outlier Removal (MeanK=50, Stddev=1.0) |
+| 4. Transform | Преобразование из camera_frame в base_link |
 
-1. **Медианный фильтр** (`cv::medianBlur`, ядро 5×5) — удаление импульсных выбросов
-2. **Морфологическое закрытие** (эрозия + дилатация):
-   - Эрозия — удаляет мелкие шумовые выбросы
-   - Дилатация — восстанавливает границы и заполняет мелкие дыры
-
+**Параметры:**
 | Параметр | Значение | Описание |
 |----------|----------|----------|
-| `morph_kernel_size` | 3 | Размер эллиптического ядра. Больше — агрессивнее сглаживание |
+| `voxel_leaf` | 0.1 | Размер вокселя (м) |
+| `sor_mean_k` | 50 | Количество соседей для SOR |
+| `sor_stddev_mul_thresh` | 1.0 | Порог SOR |
+| `cam_to_base_x` | 0.2 | Смещение камеры по X |
+| `cam_to_base_y` | 0.0 | Смещение камеры по Y |
+| `cam_to_base_z` | 0.055 | Смещение камеры по Z |
 
-### ✅ Фильтрация облака точек
+### ✅ ICP SLAM с EKF (icp_slam)
 
-При триангуляции отбрасываются точки:
-- **Вне диапазона глубины**: Z < 0.83 м (слепая зона) и Z > 15 м (неэффективная зона)
-- **Ниже уровня пола**: шумовые точки под полом отсекаются по параметру `camera_height`
+Пакет `icp_slam` объединяет одометрию колёс с ICP визуальной одометрией через расширенный фильтр Калмана (EKF).
 
+**Особенности:**
+- **Только позиция (x, y) от ICP** — углы (yaw/pitch/roll) берутся из одометрии
+- **Multiscan режим** — накопление глобальной карты окружения
+- Только **VoxelGrid** фильтрация (SOR отключён)
+
+**Параметры:**
 | Параметр | Значение | Описание |
 |----------|----------|----------|
-| `camera_height` | 0.155 | Высота камеры над полом (м) |
-| `Z_min` | 0.83 | Минимальная рабочая дистанция (м) |
-| `Z_max` | 15.0 | Максимальная рабочая дистанция (м) |
+| `MaximumIterations` | 50 | Макс. итераций ICP |
+| `MaxCorrespondenceDistance` | 0.1 | Макс. дистанция соответствия (м) |
+| `Leaf` | 0.1 | Размер вокселя для downsampling (м) |
+| `motion_noise` | [0.01, 0.01, 0.001] | Шум модели движения |
+| `measurement_noise` | [0.05, 0.05, 0.01] | Шум измерений ICP |
 
-### ✅ Топики
+**Топики:**
+| Топик | Тип | Описание |
+|-------|-----|----------|
+| `/filtered_cloud` | `sensor_msgs/PointCloud2` | Входное облако (от pointcloud_filter) |
+| `/odom` | `nav_msgs/Odometry` | Одометрия колёс |
+| `/map_cloud` | `sensor_msgs/PointCloud2` | Накопленная глобальная карта |
+| `/ekf_pose` | `geometry_msgs/PoseStamped` | Поза робота от EKF |
+
+**TF:** `map → odom`
+
+---
+
+## Топики
+
 | Топик | Тип | Описание |
 |-------|-----|----------|
 | `/left_camera` | `sensor_msgs/Image` | Выпрямленное левое изображение |
 | `/right_camera` | `sensor_msgs/Image` | Выпрямленное правое изображение |
 | `/disparity` | `sensor_msgs/Image` | Карта диспаратности (нормализованная) |
-| `/point_cloud2` | `sensor_msgs/PointCloud2` | 3D облако точек |
+| `/point_cloud2` | `sensor_msgs/PointCloud2` | 3D облако точек (сырое) |
+| `/filtered_cloud` | `sensor_msgs/PointCloud2` | 3D облако точек (отфильтрованное) |
+| `/map_cloud` | `sensor_msgs/PointCloud2` | Глобальная карта окружения |
+| `/ekf_pose` | `geometry_msgs/PoseStamped` | Поза робота (EKF) |
+| `/odom` | `nav_msgs/Odometry` | Одометрия колёс |
 
-### ✅ 3D ICP одометрия
+---
 
-Пакет `icp_processing` оценивает 6-DOF позу робота путём сопоставления последовательных облаков точек алгоритмом **GICP** (Generalized Iterative Closest Point). Без одометрии и EKF — чистая визуальная одометрия.
+## Запуск
 
-**Принцип работы:**
-1. Подписка на `/point_cloud2` от `images_processing`
-2. Фильтрация входящего облака через **Voxel Grid** (downsampling)
-3. Сопоставление с предыдущим облаком через **GICP**
-4. Накопление глобальной карты и оценка позы
-5. Публикация результата и TF
+### Основной launch файл (все узлы)
 
-**Топики:**
-| Топик | Тип | Описание |
-|-------|-----|----------|
-| `/point_cloud2` | `sensor_msgs/PointCloud2` | Входное облако точек (от `images_processing`) |
-| `/map_cloud` | `sensor_msgs/PointCloud2` | Накопленная карта окружения |
-| `/icp_pose` | `geometry_msgs/PoseStamped` | Оценка позы в фрейме `map` |
+```bash
+ros2 launch icp_slam icp_slam_launch.py
+```
 
-**TF:** `map → camera_frame`
-
-**Параметры ICP:**
-| Параметр | Значение | Описание |
-|----------|----------|----------|
-| `max_iterations` | 100 | Макс. итераций ICP |
-| `fitness_epsilon` | 1e-4 | Порог сходимости |
-| `max_correspondence_distance` | 0.5 | Макс. дистанция соответствия точек (м) |
-| `voxel_leaf` | 0.05 | Размер вокселя для downsampling (м) |
+**Запускаемые узлы:**
+1. `wheel_odometry` — одометрия колёс
+2. `images_processing` — обработка стерео, SGBM, триангуляция
+3. `keyboard_control` — управление с клавиатуры
+4. `static_transform_publisher` — трансформация base_link → camera_frame
+5. `pointcloud_filter` — фильтрация облака точек
+6. `icp_slam` — ICP SLAM с EKF
 
 ---
 
@@ -152,15 +189,22 @@ rviz2
 Добавьте displays:
 - **Image** → Topic: `/disparity`
 - **PointCloud2** → Topic: `/point_cloud2`, Fixed Frame: `camera_frame`
-- **PointCloud2** → Topic: `/map_cloud`, Fixed Frame: `map` (ICP карта)
-- **Pose** → Topic: `/icp_pose` (траектория робота)
-- **TF** — для визуализации `map → camera_frame`
+- **PointCloud2** → Topic: `/filtered_cloud`, Fixed Frame: `base_link`
+- **PointCloud2** → Topic: `/map_cloud`, Fixed Frame: `map`
+- **Pose** → Topic: `/ekf_pose`
+- **TF** — для визуализации `map → odom → base_link`
+
+---
 
 ## Требования
 
 - ROS2 (Humble/Iron/Jazzy)
 - Gazebo Classic или Gazebo Sim
 - CMake
+- OpenCV
+- PCL (Point Cloud Library)
+
+---
 
 ## Сборка
 
@@ -170,18 +214,7 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
-## Запуск
-
-```bash
-# 1. Запуск Gazebo с миром и спавн робота
-ros2 launch world_gen world_gen_launch.py
-
-# 2. Запуск обработки стереоизображений и управления (в отдельном терминале)
-ros2 launch images_processing images_processing_launch.py
-
-# 3. Запуск ICP одометрии (в отдельном терминале)
-ros2 launch icp_processing icp_processing_launch.py
-```
+---
 
 ## Управление роботом
 
@@ -196,12 +229,6 @@ sudo chmod 777 /dev/input/by-path/platform-i8042-serio-0-event-kbd
 # Или найти своё устройство
 ls -la /dev/input/event*
 sudo chmod 777 /dev/input/eventX  # замени X на номер устройства
-```
-
-**Запуск:**
-
-```bash
-ros2 run keyboard_control keyboard_control_node
 ```
 
 **Управление:**
@@ -234,6 +261,8 @@ ros2 run keyboard_control keyboard_control_node
 | | Тип соединения | Ball joint |
 
 **Привод:** Дифференциальный (два независимо управляемых колеса)
+
+---
 
 ## Лицензия
 

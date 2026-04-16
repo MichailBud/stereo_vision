@@ -9,14 +9,10 @@ def generate_launch_description():
             name="icp_processing_node",
             output="screen",
             parameters=[
-                # Параметры ICP
-                {"max_iterations": 100,              # Макс. итераций ICP
-                 "fitness_epsilon": 1e-4,            # Порог сходимости
-                 "max_correspondence_distance": 0.5, # Макс. дистанция соответствия точек (м)
-
-                 # Параметры фильтрации
-                 "voxel_leaf": 0.2                # Размер вокселя (м)
-                 }
+                {"max_iterations": 20,
+                 "fitness_epsilon": 1e-3,
+                 "max_correspondence_distance": 0.05,
+                 "voxel_leaf": 0.2}
             ]
         ),
     ])

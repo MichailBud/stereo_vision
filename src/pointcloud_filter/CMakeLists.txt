@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.8)
-project(icp_processing)
+project(pointcloud_filter)
 
 if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -38,8 +38,4 @@ ament_target_dependencies(${PROJECT_NAME}_node rclcpp sensor_msgs geometry_msgs 
 install(TARGETS
         ${PROJECT_NAME}_node
         DESTINATION lib/${PROJECT_NAME})
-install(
-    DIRECTORY launch
-    DESTINATION share/${PROJECT_NAME}
-)
 ament_package()

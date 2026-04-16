@@ -88,6 +88,11 @@ private:
     // Флаги, сообщающие что изображения получены
     bool image_left_rx = false;
     bool image_right_rx = false;
+
+    rclcpp::Time leftStamp;
+    rclcpp::Time rightStamp;
+
+    double time_diff_threshold = 0.08; // 80ms
     // Флаг, сообщающий что информация о камерах получена
     bool left_info_rx = false;
 
@@ -115,7 +120,6 @@ private:
     cv::Mat left_map_X, left_map_Y;
     cv::Mat right_map_X, right_map_Y;
 
-    cv::Ptr<cv::StereoBM> stereo_bm;
     cv::Ptr<cv::StereoSGBM> stereo_sgbm;
 
     cv::Mat disparity;
@@ -125,6 +129,13 @@ private:
     void timer_callback(){
         // Проверка на пустые изображения
         if (image_left.empty() || image_right.empty() || !left_info_rx) {
+            return;
+        }
+
+        // Проверка синхронности кадров
+        double dt = std::abs((leftStamp - rightStamp).seconds());
+        if (dt > time_diff_threshold) {
+            RCLCPP_WARN(get_logger(), "Frames not synchronized: time diff = %.3f s", dt);
             return;
         }
 
@@ -144,10 +155,10 @@ private:
         // Обеспечивая субпиксельную точность 1/16 пикселя
 
         // Медианный фильтр для удаления импульсных выбросов
-        cv::medianBlur(disparity, disparity, 5);
+        // cv::medianBlur(disparity, disparity, 5);
 
         // Эрозия + дилатация (закрытие) для удаления шума и заполнения дыр
-        applyMorphologicalClosing(disparity, morph_kernel_size);
+        // applyMorphologicalClosing(disparity, morph_kernel_size);
 
 
         // Нормализация для визуализации
@@ -245,10 +256,12 @@ private:
 
                 // Индекс в буфере
                 int idx = v * cloud_msg->row_step + u * cloud_msg->point_step;
-                // Записываем координаты
-                memcpy(&cloud_msg->data[idx + 0], &X, sizeof(float));
-                memcpy(&cloud_msg->data[idx + 4], &Y, sizeof(float));
-                memcpy(&cloud_msg->data[idx + 8], &Z, sizeof(float));
+                // Записываем координаты: Z-глубина, X-ширина (инвертирован), Y-высота (инвертирован)
+                float X_inv = -X;
+                float Y_inv = -Y;
+                memcpy(&cloud_msg->data[idx + 0], &Z, sizeof(float));
+                memcpy(&cloud_msg->data[idx + 4], &X_inv, sizeof(float));
+                memcpy(&cloud_msg->data[idx + 8], &Y_inv, sizeof(float));
                 }
             }
 
@@ -321,6 +334,7 @@ private:
         }
 
         image_left_rx = true;
+        leftStamp = msg->header.stamp;
         cv_bridge::CvImagePtr cv_ptr;
         cv_ptr = cv_bridge::toCvCopy(msg, msg->encoding); // Преобразование сообщения в формат cv::Mat осуществл. с помощью модуля cv_bridge
         image_left = cv_ptr->image;
@@ -334,6 +348,7 @@ private:
         }
 
         image_right_rx = true;
+        rightStamp = msg->header.stamp;
         cv_bridge::CvImagePtr cv_ptr;
         cv_ptr = cv_bridge::toCvCopy(msg, msg->encoding); // Преобразование сообщения в формат cv::Mat осуществл. с помощью модуля cv_bridge
         image_right  = cv_ptr->image;

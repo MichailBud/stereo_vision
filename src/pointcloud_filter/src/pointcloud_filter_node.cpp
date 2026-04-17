@@ -13,7 +13,6 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/filters/statistical_outlier_removal.h>
-#include <pcl/common/transforms.h>
 
 class PointCloudFilterNode : public rclcpp::Node
 {
@@ -22,10 +21,7 @@ public:
         : Node("pointcloud_filter_node"),
           voxel_leaf_(declare_parameter("voxel_leaf", 0.1f)),
           sor_mean_k_(declare_parameter("sor_mean_k", 50)),
-          sor_stddev_mul_thresh_(declare_parameter("sor_stddev_mul_thresh", 1.0)),
-          cam_to_base_x_(declare_parameter("cam_to_base_x", 0.2)),
-          cam_to_base_y_(declare_parameter("cam_to_base_y", 0.0)),
-          cam_to_base_z_(declare_parameter("cam_to_base_z", 0.055))
+          sor_stddev_mul_thresh_(declare_parameter("sor_stddev_mul_thresh", 1.0))
     {
         cloud_sub = create_subscription<sensor_msgs::msg::PointCloud2>(
             "/point_cloud2", 10,
@@ -84,20 +80,11 @@ private:
             return;
         }
 
-        // Преобразуем облако из camera_frame в base_link
-        Eigen::Matrix4f cam_to_base = Eigen::Matrix4f::Identity();
-        cam_to_base(0, 3) = -cam_to_base_x_;
-        cam_to_base(1, 3) = -cam_to_base_y_;
-        cam_to_base(2, 3) = -cam_to_base_z_;
-
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in_base(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::transformPointCloud(*sor_cloud, *cloud_in_base, cam_to_base);
-
-        // Публикация отфильтрованного облака
+        // Публикация отфильтрованного облака (без преобразования в base_link)
         sensor_msgs::msg::PointCloud2 filtered_msg;
-        pcl::toROSMsg(*cloud_in_base, filtered_msg);
+        pcl::toROSMsg(*sor_cloud, filtered_msg);
         filtered_msg.header.stamp = now();
-        filtered_msg.header.frame_id = "base_link";
+        filtered_msg.header.frame_id = msg->header.frame_id;  // Сохраняем исходный фрейм
         filtered_cloud_pub->publish(filtered_msg);
     }
 
@@ -105,9 +92,6 @@ private:
     float voxel_leaf_;
     int sor_mean_k_;
     float sor_stddev_mul_thresh_;
-    float cam_to_base_x_;
-    float cam_to_base_y_;
-    float cam_to_base_z_;
 
     // Подписчики и публикаторы
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub;

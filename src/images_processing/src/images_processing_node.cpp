@@ -191,7 +191,7 @@ private:
 
         // Допустимый диапазон глубины
         const float Z_min = 0.83f;
-        const float Z_max = 15.0f;
+        const float Z_max = 6.0f;
 
         // Создаём сообщение PointCloud2
         sensor_msgs::msg::PointCloud2::SharedPtr cloud_msg =

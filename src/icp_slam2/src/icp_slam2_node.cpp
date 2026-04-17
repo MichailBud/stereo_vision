@@ -6,8 +6,6 @@
 #include <rclcpp/rclcpp.hpp>
 // Тип сообщения одометрии (позиция и скорость робота)
 #include <nav_msgs/msg/odometry.hpp>
-// Тип сообщения скана лидара (дальности + углы)
-//#include <sensor_msgs/msg/laser_scan.hpp>
 // Тип сообщения облака точек (для визуализации карты)
 #include <sensor_msgs/msg/point_cloud2.hpp>
 // Публикация трансформаций между системами координат (TF)
@@ -18,7 +16,7 @@
 #include <tf2/LinearMath/Quaternion.h>
 // Библиотека линейной алгебры (матрицы, векторы, операции)
 #include <Eigen/Dense>
-// Типы точек PCL (Point Cloud Library) — например, PointXYZRGB
+// Типы точек PCL (Point Cloud Library)
 #include <pcl/point_types.h>
 // Generalized ICP — алгоритм сопоставления облаков точек
 #include <pcl/registration/gicp.h>
@@ -26,14 +24,10 @@
 #include <pcl_conversions/pcl_conversions.h>
 // Фильтр вокселизации для уменьшения плотности облака (downsampling)
 #include <pcl/filters/voxel_grid.h>
-// Фильтр удаления выбросов на основе статистики соседей
-#include <pcl/filters/statistical_outlier_removal.h>
 // Тип сообщения позы с меткой времени (для публикации результата EKF)
 #include <geometry_msgs/msg/pose_stamped.hpp>
 // Конвертация геометрии (Pose, Transform) для TF
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
-// Преобразование облаков точек
-#include <pcl/common/transforms.h>
 
 // Использование суффиксов времени из chrono (например, 1000ms)
 using namespace std::chrono_literals;
@@ -44,15 +38,13 @@ enum MatcherMode {
     Multiscan       // Накопление всех сканов в глобальную карту
 };
 
-// ============================================================================
-// Класс ScanMatcher — сопоставление лазерных сканов с помощью ICP
-// ============================================================================
+
 class ScanMatcher
 {
 public:
     // Конструктор: инициализация параметров ICP и фильтров
     ScanMatcher(int MaxIters, float EuclidFitEps, float MaxCorrespondDist, float leaf_in):
-        last_icp_transform(Eigen::Matrix4f::Identity()),
+        global_transformation(Eigen::Matrix4f::Identity()),
         fitnessScore(0.01)
 
     {
@@ -68,8 +60,9 @@ public:
         mode = m;
     }
 
-    // Только выполняет ICP и возвращает трансформацию (НЕ трогает карту)
-    Eigen::Matrix4f computeICPMatch(const sensor_msgs::msg::PointCloud2 &cloud_msg,
+    // Добавление нового облака и сопоставление с предыдущим
+    // Возвращает накопленную глобальную трансформацию
+    Eigen::Matrix4f addAndMatchScan(const sensor_msgs::msg::PointCloud2 &cloud_msg,
                                     const Eigen::Matrix4f odom_tf = Eigen::Matrix4f::Identity())
     {
         // Преобразуем сообщение PointCloud2 в облако PCL
@@ -81,87 +74,57 @@ public:
             return Eigen::Matrix4f::Identity();
         }
 
-        // Если это первое облако — сохраняем и возвращаем единичную трансформацию
-        if (!prev_local_cloud){
-            prev_local_cloud = cloud;
-            global_map_cloud = cloud;  // Инициализируем карту
-            last_icp_transform = Eigen::Matrix4f::Identity();
+        // Если это первое облако — сохраняем его и возвращаем единичную трансформацию
+        if (!prev_cloud){
+            prev_cloud = cloud;
             return Eigen::Matrix4f::Identity();
         }
 
         // ========================================================================
-        // ICP между последовательными облаками (оба в base_link)
+        // Выполнение ICP (Iterative Closest Point)
         // ========================================================================
         pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
-        icp.setInputSource(prev_local_cloud);
-        icp.setInputTarget(cloud);
-        icp.setMaximumIterations(MaximumIterations);
-        icp.setEuclideanFitnessEpsilon(EuclideanFitnessEpsilon);
-        icp.setMaxCorrespondenceDistance(MaxCorrespondenceDistance);
+        icp.setInputSource(prev_cloud);  // Источник — предыдущее (накопленное) облако
+        icp.setInputTarget(cloud);  // Цель — текущее облако
+        icp.setMaximumIterations(MaximumIterations);   // Максимальное количество итераций
+        icp.setEuclideanFitnessEpsilon(EuclideanFitnessEpsilon); // Критерий сходимости по ошибке
+        icp.setMaxCorrespondenceDistance(MaxCorrespondenceDistance); // Макс. дистанция соответствия точек
         pcl::PointCloud<pcl::PointXYZ>::Ptr output(new pcl::PointCloud<pcl::PointXYZ>);
 
-        // Запуск ICP с начальным приближением от одометрии
+        // Запуск ICP с начальным приближением от одометрии (odom_tf)
         icp.align(*output, odom_tf);
-        fitnessScore = icp.getFitnessScore();
+        fitnessScore = icp.getFitnessScore();  // Получение метрики качества совпадения
+        std::cout<<"Fitness score: "<<fitnessScore<<std::endl;
 
-        // Сохраняем трансформацию
-        last_icp_transform = icp.getFinalTransformation();
+        // Накопление глобальной трансформации: умножаем на обратную трансформацию ICP
+        global_transformation = global_transformation * icp.getFinalTransformation().inverse();
+        std::cout<<"Global transformation"<<std::endl<<global_transformation<<std::endl;
 
-        // Обновляем предыдущее облако
-        prev_local_cloud = cloud;
-
-        return last_icp_transform;
-    }
-
-    // Отдельный метод для добавления облака в глобальную карту
-    void addCloudToMap(const sensor_msgs::msg::PointCloud2 &cloud_msg,
-                       const Eigen::Matrix4f robot_pose)
-    {
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::fromROSMsg(cloud_msg, *cloud);
-
-        if (!global_map_cloud) {
-            global_map_cloud = cloud;
-            return;
-        }
-
-        // Трансформируем облако в глобальную систему координат (map)
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_transformed(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::transformPointCloud(*cloud, *cloud_transformed, robot_pose);
-
+        // Обновление предыдущего облака в зависимости от режима
         if (mode == MatcherMode::Pairwise) {
-            global_map_cloud = cloud_transformed;
+            // Режим Pairwise: просто заменяем предыдущее облако на текущее
+            prev_cloud = cloud;
         }
         else if(mode == MatcherMode::Multiscan){
-            // Добавляем трансформированное облако к глобальной карте
-            *global_map_cloud += *cloud_transformed;
+            // Режим Multiscan: трансформируем накопленное облако по найденной трансформации
+            pcl::transformPointCloud(*prev_cloud, *prev_cloud, icp.getFinalTransformation());
+            *prev_cloud += *cloud;  // Добавляем текущее облако к накопленному
 
-            // Фильтрация вокселями
+            // Фильтрация вокселями (уменьшение плотности облака для производительности)
             pcl::VoxelGrid<pcl::PointXYZ> vox;
-            vox.setInputCloud(global_map_cloud);
-            vox.setLeafSize(leaf, leaf, leaf);
-            vox.filter (*global_map_cloud);
+            vox.setInputCloud(prev_cloud);
+            vox.setLeafSize(leaf, leaf, leaf);  // Размер ячейки воксельной сетки (м)
+            vox.filter (*prev_cloud);
         }
+        return global_transformation;  // Возврат накопленной трансформации
     }
 
-    // Получение последней трансформации ICP
-    Eigen::Matrix4f getLastICPTransform() const
-    {
-        return last_icp_transform;
-    }
-
-    // Получение накопленной глобальной трансформации
-    // Eigen::Matrix4f getGlobalTransformation() const
-    // {
-    //     return global_transformation;
-    // }
-
-    // Получение глобальной карты
+    // Получение объединённого облака точек (карты) в формате ROS
     sensor_msgs::msg::PointCloud2::SharedPtr getMergedPointCloud()
     {
         std_msgs::msg::Header header;
-        header.frame_id = "map";
-        return this->converToPointCloud2(global_map_cloud, header);
+        header.frame_id = prev_cloud->header.frame_id;  // Копирование имени фрейма
+        return this->converToPointCloud2(prev_cloud, header);
     }
 
     // Получение текущего значения функции качества ICP
@@ -173,12 +136,10 @@ public:
 private:
     // Режим сопоставления (Pairwise или Multiscan)
     MatcherMode mode;
-    // Предыдущее облако точек (в base_link) для ICP
-    pcl::PointCloud<pcl::PointXYZ>::Ptr prev_local_cloud;
-    // Глобальная карта (в base_link координатах)
-    pcl::PointCloud<pcl::PointXYZ>::Ptr global_map_cloud;
-    // Последняя трансформация ICP для коррекции EKF
-    Eigen::Matrix4f last_icp_transform;
+    // Предыдущее (накопленное) облако точек
+    pcl::PointCloud<pcl::PointXYZ>::Ptr prev_cloud;
+    // Глобальная трансформация (накопленная за всё время работы)
+    Eigen::Matrix4f global_transformation;
     // Текущее значение функции качества ICP
     float fitnessScore;
 
@@ -213,10 +174,6 @@ public:
         motion_noise(declare_parameter("motion_noise", std::vector<double>{0.01, 0.01, 0.001})),
         // Чтение параметров шума измерений из launch-файла (по умолчанию [0.05, 0.05, 0.01])
         measurement_noise(declare_parameter("measurement_noise", std::vector<double>{0.05, 0.05, 0.01})),
-        // Параметры трансформации camera -> base_link
-        cam_to_base_x(declare_parameter("cam_to_base_x", 0.2)),
-        cam_to_base_y(declare_parameter("cam_to_base_y", 0.0)),
-        cam_to_base_z(declare_parameter("cam_to_base_z", 0.055)),
         // Инициализация ScanMatcher с параметрами ICP и фильтров
         sm(declare_parameter("MaximumIterations", 100),
            declare_parameter("EuclideanFitnessEpsilon", 1e-6),
@@ -265,28 +222,15 @@ public:
 
         tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(this); // TF броадкастер
 
-        sm.setMode(MatcherMode::Multiscan); // Установка режима накопления карты
-        // Таймер на 100ms — основной цикл обработки
-        timer = this->create_wall_timer(100ms, std::bind(&RobotSlam::timer_callback, this));
+        sm.setMode(MatcherMode::Pairwise); // Установка режима накопления карты
+        // Таймер — основной цикл обработки
+        timer = this->create_wall_timer(1000ms, std::bind(&RobotSlam::timer_callback, this));
     }
 
     // Callback-функция для обработки нового облака точек
     void cloudCallback(const sensor_msgs::msg::PointCloud2 &cloud_msg){
-        // Преобразуем облако из camera_frame в base_link
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::fromROSMsg(cloud_msg, *cloud);
-
-        Eigen::Matrix4f cam_to_base = Eigen::Matrix4f::Identity();
-        cam_to_base(0, 3) = -cam_to_base_x;
-        cam_to_base(1, 3) = -cam_to_base_y;
-        cam_to_base(2, 3) = -cam_to_base_z;
-
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in_base(new pcl::PointCloud<pcl::PointXYZ>);
-        pcl::transformPointCloud(*cloud, *cloud_in_base, cam_to_base);
-
-        pcl::toROSMsg(*cloud_in_base, current_cloud);
-        current_cloud.header.frame_id = "base_link";
-        is_new_cloud = true;
+        current_cloud = cloud_msg;  // Сохранение текущего облака
+        is_new_cloud = true;   // Установка флага нового облака
     }
 
     // Callback-функция для обработки одометрии
@@ -304,7 +248,7 @@ public:
             if (!odom_has_previous_pose) {
                 odom_previous_pose = odom_current_pose;
                 odom_has_previous_pose = true;
-                return; // Выход до следующего облака
+                return;  // Выход до следующего облака
             }
 
             // Если инициализация проведена, то продолжаем
@@ -331,71 +275,34 @@ public:
             this->predict(u_t);  // ШАГ 1 EKF: Предсказание состояния по модели движения
 
             // ====================================================================
-            // ШАГ 1: Предсказание и ICP
+            // ШАГ 2 EKF: Получение измерения от ICP
             // ====================================================================
-            this->predict(u_t);
+            Eigen::Matrix4f icp_transformation = sm.addAndMatchScan(current_cloud, odom_transformation);
 
-            // Создаём матрицу трансформации из ПРЕДСКАЗАННОЙ позы (для ICP как начальное приближение)
-            Eigen::Matrix4f robot_pose_predicted = Eigen::Matrix4f::Identity();
-            robot_pose_predicted(0, 3) = x_hat(0);
-            robot_pose_predicted(1, 3) = x_hat(1);
-            robot_pose_predicted(2, 3) = 0.0;
-            float theta_pred = x_hat(2);
-            robot_pose_predicted(0, 0) = cos(theta_pred);
-            robot_pose_predicted(0, 1) = -sin(theta_pred);
-            robot_pose_predicted(1, 0) = sin(theta_pred);
-            robot_pose_predicted(1, 1) = cos(theta_pred);
+            // Извлекаем матрицу вращения из ICP трансформации
+            rotation_matrix = icp_transformation.block<3,3>(0,0);
 
-            // Запускаем ICP (только вычисляем трансформацию, не добавляем в карту)
-            sm.computeICPMatch(current_cloud, odom_transformation);
+            // Предполагаем ZYX (yaw, pitch, roll) порядок вращения.
+            // Вычисляем угол поворота (yaw) из матрицы вращения
+            double theta_icp = std::atan2(rotation_matrix(1, 0), rotation_matrix(0, 0));
 
-            // Получаем локальное смещение от ICP
-            Eigen::Matrix4f icp_transform = sm.getLastICPTransform();
-
-            // Извлекаем локальное смещение (dx, dy)
-            float dx = icp_transform(0, 3);
-            float dy = icp_transform(1, 3);
-
-            // Применяем поворот робота для преобразования в глобальные координаты
+            // Получение измерения позы от ICP: z_t = [x_icp, y_icp, theta_icp]
             Eigen::Vector3d z_t;
-            z_t(0) = x_hat(0) + dx * cos(theta_pred) - dy * sin(theta_pred);
-            z_t(1) = x_hat(1) + dx * sin(theta_pred) + dy * cos(theta_pred);
-            z_t(2) = theta_pred;
+            z_t << icp_transformation(0,3), icp_transformation(1,3), theta_icp;
 
-            // ====================================================================
-            // ШАГ 2: Коррекция EKF
-            // ====================================================================
-            if (sm.getFitnessScore() < 0.5) {
-                this->correct(z_t);
-            }
-
-            // ====================================================================
-            // ШАГ 3: Теперь, когда поза ИСПРАВЛЕНА, добавляем облако в глобальную карту
-            // ====================================================================
-            Eigen::Matrix4f robot_pose_corrected = Eigen::Matrix4f::Identity();
-            robot_pose_corrected(0, 3) = x_hat(0);
-            robot_pose_corrected(1, 3) = x_hat(1);
-            robot_pose_corrected(2, 3) = 0.0;
-            float theta_corr = x_hat(2);
-            robot_pose_corrected(0, 0) = cos(theta_corr);
-            robot_pose_corrected(0, 1) = -sin(theta_corr);
-            robot_pose_corrected(1, 0) = sin(theta_corr);
-            robot_pose_corrected(1, 1) = cos(theta_corr);
-
-            // Добавляем в карту с ИСПРАВЛЕННОЙ позой
-            sm.addCloudToMap(current_cloud, robot_pose_corrected);
+            this->correct(z_t);  // ШАГ 3 EKF: Коррекция состояния по измерению ICP
 
             odom_previous_pose = odom_current_pose;  // Обновление предыдущей позы одометрии
 
             is_new_cloud = false;  // Сброс флага нового облака
 
             // ====================================================================
-            // Публикация глобальной карты для визуализации в RViz
+            // Публикация сопоставленного облака для визуализации в RViz
             // ====================================================================
             sensor_msgs::msg::PointCloud2 pointCloud;
             pointCloud = *sm.getMergedPointCloud();
-            pointCloud.header.stamp = now();
-            pointCloud.header.frame_id = "map";
+            pointCloud.header.stamp = now();  // Установка текущей метки времени
+            pointCloud.header.frame_id = current_cloud.header.frame_id;  // Установка фрейма
             pointCloud_pub->publish(pointCloud);
         }
         this->publishTF();  // Публикация TF трансформации (map -> odom)
@@ -507,8 +414,8 @@ public:
         x_hat = x_hat + K_t * y_t;
 
         // Выводим предсказанное состояние в терминал (отладочная информация)
-        // RCLCPP_INFO_STREAM(this->get_logger(),
-        //                    "EKF estimated \n"<<x_hat);
+        RCLCPP_INFO_STREAM(this->get_logger(),
+                           "EKF estimated \n"<<x_hat);
 
         // 6. Обновление ковариации: P_{t|t} = (I - K_t * H_x) * P_{t|t-1}
         // Поскольку H_x = I, формула упрощается до: P = (I - K_t) * P_predicted
@@ -597,15 +504,10 @@ private:
     std::vector<double> motion_noise;  // Шум модели движения [dx, dy, dtheta]
     std::vector<double> measurement_noise;  // Шум измерений ICP [x, y, theta]
 
-    // Параметры трансформации camera -> base_link
-    double cam_to_base_x;
-    double cam_to_base_y;
-    double cam_to_base_z;
-
     // Таймер для основного цикла обработки (10 Гц)
     rclcpp::TimerBase::SharedPtr timer;
 
-    // Объект класса сопоставления облаков (ICP + фильтры)
+    // Объект класса сопоставления сканов (ICP + фильтры)
     ScanMatcher sm;
 
     // Текущее облако точек (последнее полученное сообщение)
@@ -638,22 +540,3 @@ int main(int argc, char *argv[])
     rclcpp::shutdown();  // Завершение работы ROS 2 при остановке ноды
     return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

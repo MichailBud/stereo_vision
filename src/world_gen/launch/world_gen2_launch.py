@@ -7,14 +7,14 @@ from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
-    # Полный путь к файлу модели мира
-    world_path = '/home/michail/BIIS/stereo_vision/worlds/middle_house'
+    # Полный путь к файлу модели мира (из navigation_ws)
+    world_path = '/home/michail/building_editor_models/test_world'
 
-    #Полный путь к файлу модели робота
+    #Полный путь к файлу модели робота (robot_cameron из stereo_vision)
     robot_path = '/home/michail/BIIS/stereo_vision/models/robot_cameron/model.sdf'
     robot_xml = open(robot_path, 'r').read()
     robot_xml = robot_xml.replace('"', '\\"')
-    robot_spawn_args = '{name: \"robot_vac\", xml: \"' + robot_xml + '\" }'
+    robot_spawn_args = '{name: "robot_vac", xml: "' + robot_xml + '" }'
 
 
     return LaunchDescription([
@@ -25,4 +25,4 @@ def generate_launch_description():
             cmd=['ros2', 'service', 'call', '/spawn_entity', 'gazebo_msgs/SpawnEntity', robot_spawn_args],
             output='screen')
 
-])
+    ])

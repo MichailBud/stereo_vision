@@ -15,7 +15,6 @@ def generate_launch_description():
             name="images_processing_node",
             output="screen",
             parameters=[
-                # Параметры SGBM
                 {"sgbm_min_disparity": 0,
                  "sgbm_num_disparities": 64,
                  "sgbm_block_size": 7,
@@ -25,14 +24,8 @@ def generate_launch_description():
                  "sgbm_uniqueness_ratio": 15,
                  "sgbm_speckle_window_size": 75,
                  "sgbm_speckle_range": 4,
-
-                 # Расстояние между камерами
                  "baseline": 0.1,
-
-                 # Высота камеры над полом
                  "camera_height": 0.155,
-
-                 # Параметр ядра морфологических операций
                  "morph_kernel_size": 3}
             ]
         ),
@@ -43,7 +36,7 @@ def generate_launch_description():
             output="screen",
             parameters=[
                 {"move_speed": 0.05,
-                 "rotate_speed": 0.05}
+                 "rotate_speed": 0.01}
             ]
         ),
         Node(
@@ -71,27 +64,17 @@ def generate_launch_description():
             ]
         ),
         Node(
-            package='icp_slam',
-            executable='icp_slam_node',
+            package='icp_slam2',
+            executable='icp_slam2_node',
             output='screen',
-            name='icp_slam_node',
+            name='icp_slam2_node',
             parameters=[{
-                            # Шумы фильтра Калмана
-                            'motion_noise': [0.01, 0.01, 0.001],
-                            'measurement_noise': [0.05, 0.05, 0.01],
-
-                            # Параметры ICP
-                            'MaximumIterations': 50,
-                            'EuclideanFitnessEpsilon': 1e-6,
-                            'MaxCorrespondenceDistance': 0.1,
-
-                            # Параметры фильтрации облака точек
-                            'Leaf': 0.1,
-
-                            # Трансформация camera -> base_link
-                            'cam_to_base_x': 0.2,
-                            'cam_to_base_y': 0.0,
-                            'cam_to_base_z': 0.055
+                            'motion_noise': [10.0, 10.0, 1.9], # Шум одометрии
+                            'measurement_noise': [0.01, 0.01, 0.1], # Шум ICP
+                            'MaximumIterations': 200,
+                            'EuclideanFitnessEpsilon': 1e-4,
+                            'MaxCorrespondenceDistance': 0.5,
+                            'Leaf': 0.2
                         }]
         )
     ])

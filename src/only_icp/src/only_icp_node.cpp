@@ -39,11 +39,11 @@ enum MatcherMode {
 };
 
 
-class ScanMatcher
+class IcpReg
 {
 public:
     // Конструктор: инициализация параметров ICP и фильтров
-    ScanMatcher(int MaxIters, float EuclidFitEps, float MaxCorrespondDist, float leaf_in):
+    IcpReg(int MaxIters, float EuclidFitEps, float MaxCorrespondDist, float leaf_in):
         global_transformation(Eigen::Matrix4f::Identity()),
         fitnessScore(0.01)
 
@@ -132,7 +132,7 @@ public:
 
         // 2. Проверяем, что облако не пустое
         if (cloud->points.empty()) {
-            RCLCPP_WARN(rclcpp::get_logger("ScanMatcher"),
+            RCLCPP_WARN(rclcpp::get_logger("IcpReg"),
                         "Received empty cloud, skipping accumulation");
             return;
         }
@@ -140,7 +140,7 @@ public:
         // 3. Если это первое облако - просто сохраняем его
         if (!prev_cloud) {
             prev_cloud = cloud;
-            RCLCPP_INFO(rclcpp::get_logger("ScanMatcher"),
+            RCLCPP_INFO(rclcpp::get_logger("IcpReg"),
                         "Initial map created with %zu points", cloud->points.size());
             return;
         }
@@ -167,7 +167,7 @@ public:
         prev_cloud = filtered_cloud;
 
         // 8. Выводим отладочную информацию
-        RCLCPP_INFO(rclcpp::get_logger("ScanMatcher"),
+        RCLCPP_INFO(rclcpp::get_logger("IcpReg"),
                     "Map updated with odometry. Points before: %zu, after: %zu",
                     transformed_prev_cloud->points.size(), filtered_cloud->points.size());
     }
@@ -231,7 +231,7 @@ public:
         motion_noise(declare_parameter("motion_noise", std::vector<double>{0.01, 0.01, 0.001})),
         // Чтение параметров шума измерений из launch-файла (по умолчанию [0.05, 0.05, 0.01])
         measurement_noise(declare_parameter("measurement_noise", std::vector<double>{0.05, 0.05, 0.01})),
-        // Инициализация ScanMatcher с параметрами ICP и фильтров
+        // Инициализация IcpReg с параметрами ICP и фильтров
         sm(declare_parameter("MaximumIterations", 100),
            declare_parameter("EuclideanFitnessEpsilon", 1e-6),
            declare_parameter("MaxCorrespondenceDistance", 0.3),
@@ -518,7 +518,7 @@ private:
     rclcpp::TimerBase::SharedPtr timer;
 
     // Объект класса сопоставления сканов (ICP + фильтры)
-    ScanMatcher sm;
+    IcpReg sm;
 
     // Текущее облако точек (последнее полученное сообщение)
     sensor_msgs::msg::PointCloud2 current_cloud;

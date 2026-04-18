@@ -8,7 +8,7 @@ from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     # Полный путь к файлу модели мира
-    world_path = '/home/michail/BIIS/stereo_vision/worlds/middle_house'
+    world_path = '/home/michail/BIIS/stereo_vision/worlds/new_house2'
 
     #Полный путь к файлу модели робота
     robot_path = '/home/michail/BIIS/stereo_vision/models/robot_cameron/model.sdf'

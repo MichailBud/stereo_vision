@@ -69,8 +69,8 @@ def generate_launch_description():
             output='screen',
             name='icp_slam2_node',
             parameters=[{
-                            'motion_noise': [10.0, 10.0, 1.9], # Шум одометрии
-                            'measurement_noise': [0.01, 0.01, 0.1], # Шум ICP
+                            'motion_noise': [0.01, 0.01, 0.01], # Шум одометрии
+                            'measurement_noise': [0.5, 0.5, 0.3], # Шум ICP
                             'MaximumIterations': 200,
                             'EuclideanFitnessEpsilon': 1e-4,
                             'MaxCorrespondenceDistance': 0.5,

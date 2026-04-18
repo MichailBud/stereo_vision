@@ -81,7 +81,7 @@ public:
         }
 
         // ========================================================================
-        // Выполнение ICP (Iterative Closest Point)
+        // Выполнение ICP (Iterative Closest Point) !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
         // ========================================================================
         pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ> icp;
         icp.setInputSource(prev_cloud);  // Источник — предыдущее (накопленное) облако
@@ -222,7 +222,7 @@ public:
 
         tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(this); // TF броадкастер
 
-        sm.setMode(MatcherMode::Pairwise); // Установка режима накопления карты
+        sm.setMode(MatcherMode::Multiscan); // Установка режима накопления карты
         // Таймер — основной цикл обработки
         timer = this->create_wall_timer(1000ms, std::bind(&RobotSlam::timer_callback, this));
     }
